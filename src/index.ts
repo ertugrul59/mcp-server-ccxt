@@ -1,387 +1,316 @@
 #!/usr/bin/env node
 /**
- * CCXT MCP Server
+ * CCXT MCP Server - Official SDK Implementation
  * High-performance cryptocurrency exchange interface with optimized caching and rate limiting
  *
- * CCXT MCP 服务器
- * 具有优化缓存和速率限制的高性能加密货币交易所接口
+ * Using official @modelcontextprotocol/sdk patterns
  */
 
-// Redirect console output to stderr to avoid MCP protocol interference
-function setupConsoleRedirection() {
-  console.log = (...args) => console.error("[LOG]", ...args);
-  console.info = (...args) => console.error("[INFO]", ...args);
-  console.warn = (...args) => console.error("[WARN]", ...args);
-  console.debug = (...args) => console.error("[DEBUG]", ...args);
-}
-
-// Setup console redirection before imports
-setupConsoleRedirection();
-
-// Now we can safely import modules
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { z } from "zod";
-import * as ccxt from "ccxt";
-import dotenv from "dotenv";
-import { randomUUID } from "crypto";
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import express from "express";
+import { randomUUID } from "node:crypto";
 
-import { log, LogLevel, setLogLevel } from "./utils/logging.js";
-import { getCacheStats, clearCache } from "./utils/cache.js";
-import { rateLimiter } from "./utils/rate-limiter.js";
-import { SUPPORTED_EXCHANGES, getExchange } from "./exchange/manager.js";
+// Import all the tool modules
 import { registerAllTools } from "./tools/index.js";
 
-// Configuration interface
+/**
+ * Server configuration interface
+ */
 interface ServerConfig {
-  transport: string;
-  port: number;
-  host: string;
+  name: string;
+  version: string;
+  transport: "stdio" | "streamable-http";
+  host?: string;
+  port?: number;
 }
 
-function parseCommandLineArgs(): ServerConfig {
-  /** Parse and validate command line arguments. */
+/**
+ * Parse command line arguments
+ */
+function parseArgs(): ServerConfig {
   const args = process.argv.slice(2);
   const config: ServerConfig = {
+    name: "ccxt-mcp-server",
+    version: "1.2.2",
     transport: "stdio",
-    port: 8004,
-    host: "localhost",
   };
 
   for (let i = 0; i < args.length; i++) {
-    switch (args[i]?.toLowerCase()) {
+    const arg = args[i];
+    switch (arg) {
       case "--transport":
-        if (i + 1 < args.length && args[i + 1]) {
-          config.transport = args[i + 1];
-          i++;
+        const transport = args[++i];
+        if (transport === "streamable-http" || transport === "stdio") {
+          config.transport = transport;
         }
         break;
       case "--port":
-        if (i + 1 < args.length && args[i + 1]) {
-          const port = parseInt(args[i + 1], 10);
-          if (!isNaN(port) && port > 0 && port <= 65535) {
-            config.port = port;
-          }
-          i++;
-        }
+        config.port = parseInt(args[++i]);
         break;
       case "--host":
-        if (i + 1 < args.length && args[i + 1]) {
-          config.host = args[i + 1];
-          i++;
-        }
+        config.host = args[++i];
         break;
+      case "--help":
+        console.error(`
+CCXT MCP Server
+
+Usage: node index.js [options]
+
+Options:
+  --transport <type>    Transport type: stdio | streamable-http (default: stdio)
+  --port <number>       Port for HTTP transport (default: 8004)
+  --host <string>       Host for HTTP transport (default: localhost)
+  --help               Show this help message
+`);
+        process.exit(0);
     }
+  }
+
+  // Set defaults for HTTP transport
+  if (config.transport === "streamable-http") {
+    config.port = config.port || 8004;
+    config.host = config.host || "localhost";
   }
 
   return config;
 }
 
+/**
+ * Create and configure the MCP server
+ */
 function createMcpServer(): McpServer {
-  /** Create and configure the MCP server with resources and basic tools. */
+  console.error(`🚀 Creating CCXT MCP Server...`);
+
   const server = new McpServer({
-    name: "CCXT MCP Server",
-    version: "1.1.0",
-    capabilities: {
-      resources: {},
-      tools: {},
-    },
+    name: "ccxt-mcp-server",
+    version: "1.2.2",
+    description: "High-performance CCXT exchange interface with caching and rate limiting",
   });
 
-  // Resource: Exchanges list
-  server.resource("exchanges", "ccxt://exchanges", async (uri) => {
-    return {
-      contents: [
-        {
-          uri: uri.href,
-          text: JSON.stringify(SUPPORTED_EXCHANGES, null, 2),
-        },
-      ],
-    };
-  });
+  console.error(`⚙️ Registering tools...`);
 
-  // Resource template: Markets
-  server.resource("markets", new ResourceTemplate("ccxt://{exchange}/markets", { list: undefined }), async (uri, params) => {
-    try {
-      const exchange = params.exchange as string;
-      const ex = getExchange(exchange);
-      await ex.loadMarkets();
+  // Register all tools from the tools module
+  registerAllTools(server);
 
-      const markets = Object.values(ex.markets).map((market) => ({
-        symbol: (market as any).symbol,
-        base: (market as any).base,
-        quote: (market as any).quote,
-        active: (market as any).active,
-      }));
-
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify(markets, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: `Error fetching markets: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  });
-
-  // Resource template: Ticker
-  server.resource("ticker", new ResourceTemplate("ccxt://{exchange}/ticker/{symbol}", { list: undefined }), async (uri, params) => {
-    try {
-      const exchange = params.exchange as string;
-      const symbol = params.symbol as string;
-      const ex = getExchange(exchange);
-      const ticker = await ex.fetchTicker(symbol);
-
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify(ticker, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: `Error fetching ticker: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  });
-
-  // Resource template: Order book
-  server.resource("order-book", new ResourceTemplate("ccxt://{exchange}/orderbook/{symbol}", { list: undefined }), async (uri, params) => {
-    try {
-      const exchange = params.exchange as string;
-      const symbol = params.symbol as string;
-      const ex = getExchange(exchange);
-      const orderbook = await ex.fetchOrderBook(symbol);
-
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: JSON.stringify(orderbook, null, 2),
-          },
-        ],
-      };
-    } catch (error) {
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            text: `Error fetching order book: ${error instanceof Error ? error.message : String(error)}`,
-          },
-        ],
-      };
-    }
-  });
+  console.error(`✅ All tools registered successfully`);
 
   return server;
 }
 
-function registerManagementTools(server: McpServer): void {
-  /** Register cache and logging management tools. */
-  // Cache statistics tool
-  server.tool("cache-stats", "Get CCXT cache statistics", {}, async () => {
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(getCacheStats(), null, 2),
-        },
-      ],
-    };
-  });
+/**
+ * Start server with stdio transport
+ */
+async function startStdioServer(): Promise<void> {
+  console.error(`📡 Starting stdio transport...`);
 
-  // Cache clearing tool
-  server.tool("clear-cache", "Clear CCXT cache", {}, async () => {
-    clearCache();
-    return {
-      content: [
-        {
-          type: "text",
-          text: "Cache cleared successfully.",
-        },
-      ],
-    };
-  });
-
-  // Log level management
-  server.tool(
-    "set-log-level",
-    "Set logging level",
-    {
-      level: z.enum(["debug", "info", "warning", "error"]).describe("Logging level to set"),
-    },
-    async ({ level }) => {
-      setLogLevel(level);
-      return {
-        content: [
-          {
-            type: "text",
-            text: `Log level set to ${level}.`,
-          },
-        ],
-      };
-    }
-  );
-}
-
-async function setupHttpTransport(server: McpServer, config: ServerConfig): Promise<void> {
-  /** Set up HTTP transport with Express server and proper error handling. */
-  try {
-    const express = await import("express");
-    const http = await import("http");
-
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
-    });
-
-    await server.connect(transport);
-
-    // Create Express app and HTTP server
-    const app = express.default();
-    app.use(express.default.json());
-
-    // Add CORS headers
-    app.use((req, res, next) => {
-      res.header("Access-Control-Allow-Origin", "*");
-      res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
-      res.header("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Session-Id, Last-Event-ID");
-      res.header("Access-Control-Expose-Headers", "Mcp-Session-Id");
-      if (req.method === "OPTIONS") {
-        res.sendStatus(200);
-      } else {
-        next();
-      }
-    });
-
-    // MCP endpoint - handle both /mcp and /mcp/ paths
-    app.all("/mcp", async (req, res) => {
-      await transport.handleRequest(req, res, req.body);
-    });
-
-    app.all("/mcp/", async (req, res) => {
-      await transport.handleRequest(req, res, req.body);
-    });
-
-    // Create HTTP server
-    const httpServer = http.createServer(app);
-
-    return new Promise((resolve, reject) => {
-      httpServer.listen(config.port, config.host, () => {
-        log(LogLevel.INFO, `CCXT MCP server listening on http://${config.host}:${config.port}`);
-        resolve();
-      });
-
-      httpServer.on("error", (error) => {
-        reject(error);
-      });
-    });
-  } catch (error) {
-    throw new Error(`Failed to setup HTTP transport: ${error instanceof Error ? error.message : String(error)}`);
-  }
-}
-
-async function setupStdioTransport(server: McpServer): Promise<void> {
-  /** Set up stdio transport. */
+  const server = createMcpServer();
   const transport = new StdioServerTransport();
+
   await server.connect(transport);
+  console.error(`✅ CCXT MCP Server running on stdio`);
 }
 
-function setupProcessHandlers(): void {
-  /** Set up process signal handlers for graceful shutdown. */
-  process.on("uncaughtException", (error) => {
-    log(LogLevel.ERROR, `Uncaught exception: ${error.message}`);
-    log(LogLevel.ERROR, error.stack || "No stack trace");
-    process.exit(1);
+/**
+ * Start server with StreamableHTTP transport (Official SDK Pattern)
+ */
+async function startHttpServer(config: ServerConfig): Promise<void> {
+  console.error(`🔥 Starting StreamableHTTP transport...`);
+  console.error(`🌐 Server will listen on ${config.host}:${config.port}`);
+
+  const app = express();
+  app.use(express.json());
+
+  // Add CORS headers for MCP compatibility
+  app.use((req, res, next) => {
+    res.header("Access-Control-Allow-Origin", "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Accept, Authorization, Mcp-Session-Id, Mcp-Protocol-Version");
+    res.header("Access-Control-Expose-Headers", "Mcp-Session-Id");
+
+    if (req.method === "OPTIONS") {
+      res.sendStatus(200);
+      return;
+    }
+    next();
   });
 
-  process.on("unhandledRejection", (reason) => {
-    log(LogLevel.ERROR, `Unhandled rejection: ${reason}`);
-    process.exit(1);
+  // Map to store transports by session ID (Official Pattern)
+  const transports: { [sessionId: string]: StreamableHTTPServerTransport } = {};
+
+  // Health check endpoint
+  app.get("/", (req, res) => {
+    res.json({
+      name: "CCXT MCP Server",
+      version: "1.2.2",
+      status: "running",
+      endpoint: "/mcp/",
+      timestamp: new Date().toISOString(),
+    });
   });
 
-  process.on("SIGINT", () => {
-    log(LogLevel.INFO, "Received SIGINT, shutting down gracefully");
-    process.exit(0);
+  // Handle POST requests for client-to-server communication (Official Pattern)
+  app.post("/mcp", async (req, res) => {
+    try {
+      // Check for existing session ID
+      const sessionId = req.headers["mcp-session-id"] as string | undefined;
+      let transport: StreamableHTTPServerTransport;
+
+      if (sessionId && transports[sessionId]) {
+        // Reuse existing transport
+        transport = transports[sessionId];
+        console.error(`🔄 Using existing session: ${sessionId}`);
+      } else if (!sessionId && isInitializeRequest(req.body)) {
+        // New initialization request - create new transport
+        console.error(`🆕 Creating new session for initialization request`);
+
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => {
+            const newSessionId = randomUUID();
+            console.error(`🎫 Generated session ID: ${newSessionId}`);
+            return newSessionId;
+          },
+          // Store transport when session is initialized
+          onsessioninitialized: (sessionId) => {
+            console.error(`💾 Session initialized and stored: ${sessionId}`);
+            transports[sessionId] = transport;
+          },
+        });
+
+        // Clean up transport when closed
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            console.error(`🧹 Cleaning up session: ${transport.sessionId}`);
+            delete transports[transport.sessionId];
+          }
+        };
+
+        // Create and connect MCP server to transport
+        const server = createMcpServer();
+        await server.connect(transport);
+        console.error(`🔗 MCP server connected to new transport`);
+      } else {
+        // Invalid request
+        console.error(`❌ Invalid request: no session ID and not an initialize request`);
+        res.status(400).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32600,
+            message: "Invalid Request: Missing session ID or not an initialize request",
+          },
+          id: null,
+        });
+        return;
+      }
+
+      // Handle the request using the transport
+      await transport.handleRequest(req, res, req.body);
+    } catch (error) {
+      console.error(`💥 Error handling MCP request:`, error);
+      if (!res.headersSent) {
+        res.status(500).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32603,
+            message: "Internal server error",
+          },
+          id: null,
+        });
+      }
+    }
   });
 
-  process.on("SIGTERM", () => {
-    log(LogLevel.INFO, "Received SIGTERM, shutting down gracefully");
-    process.exit(0);
+  // Handle GET requests for server-to-client notifications via SSE (Official Pattern)
+  app.get("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (!sessionId || !transports[sessionId]) {
+      console.error(`❌ GET request with invalid session ID: ${sessionId}`);
+      res.status(400).send("Invalid or missing session ID");
+      return;
+    }
+
+    console.error(`📡 Handling GET request for session: ${sessionId}`);
+    const transport = transports[sessionId];
+    await transport.handleRequest(req, res);
   });
+
+  // Handle DELETE requests for session termination (Official Pattern)
+  app.delete("/mcp", async (req, res) => {
+    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    if (!sessionId || !transports[sessionId]) {
+      console.error(`❌ DELETE request with invalid session ID: ${sessionId}`);
+      res.status(400).send("Invalid or missing session ID");
+      return;
+    }
+
+    console.error(`🗑️ Handling DELETE request for session: ${sessionId}`);
+    const transport = transports[sessionId];
+    await transport.handleRequest(req, res);
+  });
+
+  // Error handling middleware
+  app.use((error: any, req: any, res: any, next: any) => {
+    console.error(`💥 Express error:`, error);
+    if (!res.headersSent) {
+      res.status(500).json({
+        error: "Internal Server Error",
+        message: error.message,
+        timestamp: new Date().toISOString(),
+      });
+    }
+  });
+
+  // Start the HTTP server
+  const httpServer = app.listen(config.port, config.host, () => {
+    console.error(`🚀 CCXT MCP Server listening on http://${config.host}:${config.port}`);
+    console.error(`📡 MCP endpoint: http://${config.host}:${config.port}/mcp/`);
+    console.error(`🔍 Health check: http://${config.host}:${config.port}/`);
+    console.error(`✅ Server ready to accept connections`);
+  });
+
+  // Graceful shutdown handling
+  const shutdown = () => {
+    console.error(`🛑 Shutting down server...`);
+    httpServer.close(() => {
+      console.error(`✅ HTTP server closed`);
+      process.exit(0);
+    });
+  };
+
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
 }
 
+/**
+ * Main function
+ */
 async function main(): Promise<void> {
-  /** Main function to initialize and start the CCXT MCP server. */
   try {
-    // Load environment variables
-    dotenv.config();
+    const config = parseArgs();
 
-    // Parse command line arguments
-    const config = parseCommandLineArgs();
-
-    // Setup process handlers
-    setupProcessHandlers();
-
-    // Log startup info only if running in terminal
-    if (process.stdout.isTTY) {
-      log(LogLevel.INFO, "Starting CCXT MCP Server...");
-      log(LogLevel.INFO, `Transport mode: ${config.transport}`);
-      if (config.transport === "streamable-http") {
-        log(LogLevel.INFO, `HTTP Server: ${config.host}:${config.port}`);
-      }
-    }
-
-    // Create and configure server
-    const server = createMcpServer();
-
-    // Register management tools
-    registerManagementTools(server);
-
-    // Register all exchange tools
-    registerAllTools(server);
-
-    // Setup transport
+    console.error(`\n==================================================`);
+    console.error(`🎯 CCXT MCP Server v${config.version}`);
+    console.error(`📋 Transport: ${config.transport}`);
     if (config.transport === "streamable-http") {
-      try {
-        await setupHttpTransport(server, config);
-      } catch (error) {
-        log(LogLevel.ERROR, `HTTP transport failed: ${error instanceof Error ? error.message : String(error)}`);
-        log(LogLevel.INFO, "Falling back to stdio transport");
-        await setupStdioTransport(server);
-      }
-    } else {
-      await setupStdioTransport(server);
+      console.error(`🌐 Address: http://${config.host}:${config.port}`);
     }
+    console.error(`==================================================\n`);
 
-    if (process.stdout.isTTY) {
-      log(LogLevel.INFO, "CCXT MCP Server is running");
+    if (config.transport === "stdio") {
+      await startStdioServer();
+    } else {
+      await startHttpServer(config);
     }
   } catch (error) {
-    log(LogLevel.ERROR, `Failed to start server: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`💥 Fatal error:`, error);
     process.exit(1);
   }
 }
 
-// Start the MCP server
+// Start the server
 main().catch((error) => {
-  log(LogLevel.ERROR, `Unhandled error in main: ${error instanceof Error ? error.message : String(error)}`);
+  console.error(`💥 Unhandled error:`, error);
   process.exit(1);
 });
