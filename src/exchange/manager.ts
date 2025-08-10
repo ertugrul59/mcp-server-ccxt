@@ -1,24 +1,43 @@
 /**
  * Exchange Manager
  * Manages cryptocurrency exchange instances and provides utility functions
- * 
+ *
  * 交易所管理器
  * 管理加密货币交易所实例并提供实用函数
  */
-import * as ccxt from 'ccxt';
-import { log, LogLevel } from '../utils/logging.js';
+import * as ccxt from "ccxt";
+import { log, LogLevel } from "../utils/logging.js";
 
 // List of supported exchanges
 // 支持的交易所列表
 export const SUPPORTED_EXCHANGES = [
   // 原有交易所
-  'binance', 'coinbase', 'kraken', 'kucoin', 'okx', 
-  'gate', 'bybit', 'mexc', 'huobi',
+  "binance",
+  "coinbase",
+  "kraken",
+  "kucoin",
+  "okx",
+  "gate",
+  "bybit",
+  "mexc",
+  "huobi",
   // 新增主流交易所
-  'bitget', 'coinex', 'cryptocom', 'hashkey', 'hyperliquid',
+  "bitget",
+  "coinex",
+  "cryptocom",
+  "hashkey",
+  "hyperliquid",
   // 延伸现有交易所的衍生品市场
-  'binanceusdm', 'binancecoinm', 'kucoinfutures', 'bitfinex', 'bitmex',
-  'gateio', 'woo', 'deribit', 'phemex', 'bingx'
+  "binanceusdm",
+  "binancecoinm",
+  "kucoinfutures",
+  "bitfinex",
+  "bitmex",
+  "gateio",
+  "woo",
+  "deribit",
+  "phemex",
+  "bingx",
 ];
 
 // Exchange instance cache
@@ -30,32 +49,32 @@ const exchanges: Record<string, ccxt.Exchange> = {};
  * This is useful when proxy or other configurations change
  */
 export function clearExchangeCache(): void {
-  Object.keys(exchanges).forEach(key => {
+  Object.keys(exchanges).forEach((key) => {
     delete exchanges[key];
   });
-  log(LogLevel.INFO, 'Exchange cache cleared');
+  log(LogLevel.INFO, "Exchange cache cleared");
 }
 
 // Default exchange and market type
 // 默认交易所和市场类型
-export const DEFAULT_EXCHANGE = process.env.DEFAULT_EXCHANGE || 'binance';
-export const DEFAULT_MARKET_TYPE = process.env.DEFAULT_MARKET_TYPE || 'spot';
+export const DEFAULT_EXCHANGE = process.env.DEFAULT_EXCHANGE || "binance";
+export const DEFAULT_MARKET_TYPE = process.env.DEFAULT_MARKET_TYPE || "spot";
 
 // Market types enum
 // 市场类型枚举
 export enum MarketType {
-  SPOT = 'spot',
-  FUTURE = 'future',
-  SWAP = 'swap',
-  OPTION = 'option',
-  MARGIN = 'margin'
+  SPOT = "spot",
+  FUTURE = "future",
+  SWAP = "swap",
+  OPTION = "option",
+  MARGIN = "margin",
 }
 
 /**
  * Get exchange instance
  * @param exchangeId Exchange ID
  * @returns Exchange instance
- * 
+ *
  * 获取交易所实例
  * @param exchangeId 交易所ID
  * @returns 交易所实例
@@ -65,18 +84,18 @@ export enum MarketType {
  * @returns Proxy configuration or null if proxy is disabled
  */
 export function getProxyConfig(): { url: string; username?: string; password?: string } | null {
-  const useProxy = process.env.USE_PROXY === 'true';
+  const useProxy = process.env.USE_PROXY === "true";
   if (!useProxy) return null;
-  
+
   const url = process.env.PROXY_URL;
   if (!url) {
-    log(LogLevel.WARNING, 'USE_PROXY is true but PROXY_URL is not set');
+    log(LogLevel.WARNING, "USE_PROXY is true but PROXY_URL is not set");
     return null;
   }
-  
+
   const username = process.env.PROXY_USERNAME || undefined;
   const password = process.env.PROXY_PASSWORD || undefined;
-  
+
   return { url, username, password };
 }
 
@@ -87,11 +106,11 @@ export function getProxyConfig(): { url: string; username?: string; password?: s
  */
 function formatProxyUrl(config: { url: string; username?: string; password?: string }): string {
   if (!config.username || !config.password) return config.url;
-  
+
   // Extract protocol and host from URL
   const match = config.url.match(/^(https?|socks[45]):\/\/([^\/]+)/);
   if (!match) return config.url;
-  
+
   const protocol = match[1];
   const host = match[2];
   return `${protocol}://${config.username}:${config.password}@${host}`;
@@ -112,53 +131,77 @@ export function getExchange(exchangeId?: string): ccxt.Exchange {
  * @param marketType Market type (spot, future, etc.)
  * @returns Exchange instance
  */
-export function getExchangeWithMarketType(exchangeId?: string, marketType: MarketType | string = MarketType.SPOT): ccxt.Exchange {
+export function getExchangeWithMarketType(
+  exchangeId?: string,
+  marketType: MarketType | string = MarketType.SPOT
+): ccxt.Exchange {
   const id = (exchangeId || DEFAULT_EXCHANGE).toLowerCase();
   const type = marketType || DEFAULT_MARKET_TYPE;
-  
+
   // Create a cache key that includes both exchange ID and market type
   const cacheKey = `${id}:${type}`;
-  
+
   if (!exchanges[cacheKey]) {
     if (!SUPPORTED_EXCHANGES.includes(id)) {
       throw new Error(`Exchange '${id}' not supported`);
     }
-    
+
     const apiKey = process.env[`${id.toUpperCase()}_API_KEY`];
     const secret = process.env[`${id.toUpperCase()}_SECRET`];
-    
+
     try {
       log(LogLevel.INFO, `Initializing exchange: ${id} (${type})`);
       // Use indexed access to create exchange instance
       const ExchangeClass = ccxt[id as keyof typeof ccxt];
-      
+
       // Configure options with possible proxy
       const options: any = {
         apiKey,
         secret,
         enableRateLimit: true,
-        options: {}
+        options: {},
       };
-      
+
       // Configure market type specifics
       if (type !== MarketType.SPOT) {
         options.options.defaultType = type;
       }
-      
+
       // Add proxy configuration if enabled
       const proxyConfig = getProxyConfig();
       if (proxyConfig) {
         options.proxy = formatProxyUrl(proxyConfig);
         log(LogLevel.INFO, `Using proxy for ${id}`);
       }
-      
-      exchanges[cacheKey] = new (ExchangeClass as any)(options);
+
+      // Create exchange instance
+      const ex = new (ExchangeClass as any)(options);
+      // Enable Bybit testnet when requested
+      if (id === "bybit" && process.env.BYBIT_TESTNET === "true") {
+        try {
+          if (typeof (ex as any).setSandboxMode === "function") {
+            (ex as any).setSandboxMode(true);
+            log(LogLevel.INFO, "Bybit sandbox mode enabled (testnet)");
+          }
+        } catch (e) {
+          log(
+            LogLevel.WARNING,
+            `Failed to enable Bybit sandbox mode: ${e instanceof Error ? e.message : String(e)}`
+          );
+        }
+      }
+      exchanges[cacheKey] = ex;
     } catch (error) {
-      log(LogLevel.ERROR, `Failed to initialize exchange ${id} (${type}): ${error instanceof Error ? error.message : String(error)}`);
+      log(
+        LogLevel.ERROR,
+        `Failed to initialize exchange ${id} (${type}): ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
       throw new Error(`Failed to initialize exchange ${id} (${type}): ${error.message}`);
     }
   }
-  
+
   return exchanges[cacheKey];
 }
 
@@ -168,7 +211,7 @@ export function getExchangeWithMarketType(exchangeId?: string, marketType: Marke
  * @param apiKey API key
  * @param secret API secret
  * @returns Exchange instance
- * 
+ *
  * 使用特定凭据获取交易所实例
  * @param exchangeId 交易所ID
  * @param apiKey API密钥
@@ -185,34 +228,53 @@ export function getExchangeWithCredentials(
     if (!SUPPORTED_EXCHANGES.includes(exchangeId)) {
       throw new Error(`Exchange '${exchangeId}' not supported`);
     }
-    
+
     const type = marketType || DEFAULT_MARKET_TYPE;
-    
+
     // Configure options with possible proxy
     const options: any = {
       apiKey,
       secret,
       enableRateLimit: true,
-      options: {}
+      options: {},
     };
-    
+
     // Configure market type specifics
     if (type !== MarketType.SPOT) {
       options.options.defaultType = type;
     }
-    
+
     // Add proxy configuration if enabled
     const proxyConfig = getProxyConfig();
     if (proxyConfig) {
       options.proxy = formatProxyUrl(proxyConfig);
       log(LogLevel.INFO, `Using proxy for ${exchangeId} (${type}) with custom credentials`);
     }
-    
+
     // Use indexed access to create exchange instance
     const ExchangeClass = ccxt[exchangeId as keyof typeof ccxt];
-    return new (ExchangeClass as any)(options);
+    const ex = new (ExchangeClass as any)(options);
+    if (exchangeId.toLowerCase() === "bybit" && process.env.BYBIT_TESTNET === "true") {
+      try {
+        if (typeof (ex as any).setSandboxMode === "function") {
+          (ex as any).setSandboxMode(true);
+          log(LogLevel.INFO, "Bybit sandbox mode enabled (testnet)");
+        }
+      } catch (e) {
+        log(
+          LogLevel.WARNING,
+          `Failed to enable Bybit sandbox mode: ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+    }
+    return ex;
   } catch (error) {
-    log(LogLevel.ERROR, `Failed to initialize exchange ${exchangeId} with credentials: ${error instanceof Error ? error.message : String(error)}`);
+    log(
+      LogLevel.ERROR,
+      `Failed to initialize exchange ${exchangeId} with credentials: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
     throw new Error(`Failed to initialize exchange ${exchangeId}: ${error.message}`);
   }
 }
@@ -221,7 +283,7 @@ export function getExchangeWithCredentials(
  * Validate and format trading pair symbol
  * @param symbol Trading pair symbol
  * @returns Formatted trading pair symbol
- * 
+ *
  * 验证和格式化交易对符号
  * @param symbol 交易对符号
  * @returns 格式化的交易对符号
@@ -229,7 +291,7 @@ export function getExchangeWithCredentials(
 export function validateSymbol(symbol: string): string {
   // Simple validation to ensure symbol includes slash
   // 简单验证，确保符号包含斜杠
-  if (!symbol.includes('/')) {
+  if (!symbol.includes("/")) {
     throw new Error(`Invalid symbol: ${symbol}, should be in format like BTC/USDT`);
   }
   return symbol.toUpperCase();
