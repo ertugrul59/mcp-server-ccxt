@@ -340,16 +340,24 @@ export function registerPrivateTools(server: McpServer) {
       side: z.enum(["buy", "sell"]).describe("Order side: buy or sell"),
       amount: z.number().positive().describe("Amount to buy/sell"),
       params: z.record(z.any()).optional().describe("Additional order parameters"),
-      apiKey: z.string().describe("API key for authentication"),
-      secret: z.string().describe("API secret for authentication"),
       marketType: z
         .enum(["future", "swap"])
         .default("future")
         .describe("Market type (default: future)"),
     },
-    async ({ exchange, symbol, side, amount, params, apiKey, secret, marketType }) => {
+    async ({ exchange, symbol, side, amount, params, marketType }) => {
       try {
         return await rateLimiter.execute(exchange, async () => {
+          // Get API credentials from environment variables
+          const apiKey = process.env[`${exchange.toUpperCase()}_API_KEY`];
+          const secret = process.env[`${exchange.toUpperCase()}_SECRET`];
+
+          if (!apiKey || !secret) {
+            throw new Error(
+              `Missing API credentials for ${exchange}. Please set ${exchange.toUpperCase()}_API_KEY and ${exchange.toUpperCase()}_SECRET environment variables.`
+            );
+          }
+
           // Get futures exchange
           const ex = getExchangeWithCredentials(exchange, apiKey, secret, marketType);
 
@@ -408,16 +416,24 @@ export function registerPrivateTools(server: McpServer) {
       amount: z.number().positive().describe("Amount to buy/sell"),
       price: z.number().positive().describe("Limit price"),
       params: z.record(z.any()).optional().describe("Additional order parameters"),
-      apiKey: z.string().describe("API key for authentication"),
-      secret: z.string().describe("API secret for authentication"),
       marketType: z
         .enum(["future", "swap"])
         .default("future")
         .describe("Market type (default: future)"),
     },
-    async ({ exchange, symbol, side, amount, price, params, apiKey, secret, marketType }) => {
+    async ({ exchange, symbol, side, amount, price, params, marketType }) => {
       try {
         return await rateLimiter.execute(exchange, async () => {
+          // Get API credentials from environment variables
+          const apiKey = process.env[`${exchange.toUpperCase()}_API_KEY`];
+          const secret = process.env[`${exchange.toUpperCase()}_SECRET`];
+
+          if (!apiKey || !secret) {
+            throw new Error(
+              `Missing API credentials for ${exchange}. Please set ${exchange.toUpperCase()}_API_KEY and ${exchange.toUpperCase()}_SECRET environment variables.`
+            );
+          }
+
           const ex = getExchangeWithCredentials(exchange, apiKey, secret, marketType);
           log(
             LogLevel.INFO,
