@@ -19,16 +19,24 @@ export function registerPrivateTools(server: McpServer) {
     "Get your account balance from a crypto exchange",
     {
       exchange: z.string().describe("Exchange ID (e.g., binance, coinbase)"),
-      apiKey: z.string().describe("API key for authentication"),
-      secret: z.string().describe("API secret for authentication"),
       marketType: z
         .enum(["spot", "future", "swap", "option", "margin"])
         .optional()
         .describe("Market type (default: spot)"),
     },
-    async ({ exchange, apiKey, secret, marketType }) => {
+    async ({ exchange, marketType }) => {
       try {
         return await rateLimiter.execute(exchange, async () => {
+          // Get API credentials from environment variables
+          const apiKey = process.env[`${exchange.toUpperCase()}_API_KEY`];
+          const secret = process.env[`${exchange.toUpperCase()}_SECRET`];
+
+          if (!apiKey || !secret) {
+            throw new Error(
+              `Missing API credentials for ${exchange}. Please set ${exchange.toUpperCase()}_API_KEY and ${exchange.toUpperCase()}_SECRET environment variables.`
+            );
+          }
+
           // Get exchange with market type
           const ex = getExchangeWithCredentials(exchange, apiKey, secret, marketType);
 
