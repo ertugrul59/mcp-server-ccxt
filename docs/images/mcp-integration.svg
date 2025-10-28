@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 900">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 900">
   <!-- Background - pure white -->
-  <rect width="1200" height="900" fill="#ffffff" />
+  <rect width="1400" height="900" fill="#ffffff" />
   
   <!-- Title -->
   <text x="600" y="50" text-anchor="middle" font-family="Arial, sans-serif" font-size="32" font-weight="bold" fill="#333">CCXT MCP Server - Integration Architecture</text>
